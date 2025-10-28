@@ -1,0 +1,320 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Simple Firebase Dashboard</title>
+    <style>
+        :root {
+            --bg: #0f1724;
+            --card: #0b1220;
+            --accent: #06b6d4;
+            --muted: #94a3b8;
+            --text: #e6eef6;
+            --gap: 12px;
+            --pad: 14px;
+        }
+
+        html,
+        body {
+            height: 100%;
+            margin: 0;
+            font-family: Inter, system-ui, Arial, sans-serif;
+            background: linear-gradient(180deg, var(--bg), #081122);
+            color: var(--text);
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: 28px auto;
+            padding: 18px;
+        }
+
+        header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 18px;
+            gap: 12px
+        }
+
+        header h1 {
+            font-size: 20px;
+            margin: 0
+        }
+
+        .meta {
+            color: var(--muted);
+            font-size: 13px
+        }
+
+        .top-row {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: var(--gap);
+            margin-bottom: 18px
+        }
+
+        .section {
+            background: rgba(255, 255, 255, 0.02);
+            padding: 12px;
+            border-radius: 10px;
+            margin-bottom: 14px
+        }
+
+        .section-title {
+            font-weight: 600;
+            color: var(--accent);
+            margin: 0 0 10px 0
+        }
+
+        /* small grid for the 4 sections (each 12 cards -> 3 columns x 4 rows) */
+        .grid-12 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px
+        }
+
+        /* card styles */
+        .card {
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.01));
+            border: 1px solid rgba(255, 255, 255, 0.03);
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 68px;
+            box-shadow: 0 4px 12px rgba(2, 6, 23, 0.6);
+        }
+
+        .card .label {
+            font-size: 12px;
+            color: var(--muted);
+            margin-bottom: 6px
+        }
+
+        .card .value {
+            font-size: 18px;
+            font-weight: 700
+        }
+
+        /* big cards in top row */
+        .top-card {
+            min-height: 110px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            padding: 18px
+        }
+
+        /* responsive */
+        @media (max-width:980px) {
+            .top-row {
+                grid-template-columns: repeat(3, 1fr)
+            }
+
+            .grid-12 {
+                grid-template-columns: repeat(2, 1fr)
+            }
+        }
+
+        @media (max-width:520px) {
+            .top-row {
+                grid-template-columns: repeat(2, 1fr)
+            }
+
+            .grid-12 {
+                grid-template-columns: 1fr
+            }
+        }
+
+        .status {
+            font-size: 13px;
+            color: var(--muted)
+        }
+
+        .small {
+            font-size: 12px;
+            color: var(--muted)
+        }
+
+        footer {
+            color: var(--muted);
+            font-size: 12px;
+            margin-top: 10px;
+            text-align: center
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <div>
+                <h1>Simple Firebase Dashboard</h1>
+                <div class="meta">54 readings — top 6 highlighted — then 4 sections × 12 readings</div>
+            </div>
+            <div style="text-align:right">
+                <div class="status" id="status">Connecting…</div>
+                <div class="small" id="lastUpdate">Last update: —</div>
+            </div>
+        </header>
+
+        <!-- Top 6 -->
+        <div class="top-row" id="topRow">
+            <!-- JS will populate 6 big cards -->
+        </div>
+
+        <!-- Four sections of 12 readings -->
+        <div id="sections">
+            <!-- JS will populate 4 sections each with 12 cards -->
+        </div>
+
+        <footer>
+            <div>Deploy on GitHub Pages — update the <code>DATABASE_URL</code> in script.</div>
+        </footer>
+    </div>
+
+    <script>
+        /*********************
+                    * CONFIGURE THESE
+                    *********************/
+        // Your Firebase Realtime Database endpoint (no trailing path), e.g.
+        // "https://your-project-id-default-rtdb.firebaseio.com"
+        const DATABASE_URL = "https://iot-hostdata-default-rtdb.europe-west1.firebasedatabase.app";
+
+        // The path in the DB that holds the 54 readings.
+        // The script expects either an array (index 0..53) or an object with 54 values.
+        // Example: /readings  -> will fetch DATABASE_URL + "/readings.json"
+        const DATA_NODE = "/readings";
+
+        // Poll interval (ms)
+        const POLL_INTERVAL = 5000; // every 5 seconds
+
+        /*********************
+         * UI helpers
+         *********************/
+        const topRow = document.getElementById('topRow');
+        const sectionsWrap = document.getElementById('sections');
+        const statusEl = document.getElementById('status');
+        const lastUpdateEl = document.getElementById('lastUpdate');
+
+        function makeCard(label, value, isTop = false) {
+            const div = document.createElement('div');
+            div.className = 'card' + (isTop ? ' top-card' : '');
+            const lab = document.createElement('div'); lab.className = 'label'; lab.textContent = label;
+            const val = document.createElement('div'); val.className = 'value'; val.textContent = value;
+            div.appendChild(lab); div.appendChild(val);
+            return div;
+        }
+
+        function renderReadings(arr) {
+            // arr must be an array of 54 items (strings, numbers, or objects)
+            // Clear top row
+            topRow.innerHTML = '';
+            sectionsWrap.innerHTML = '';
+
+            // Top 6
+            for (let i = 0; i < 6; i++) {
+                const r = arr[i] !== undefined ? arr[i] : null;
+                const label = `Reading ${i + 1}`;
+                const value = formatValue(r);
+                topRow.appendChild(makeCard(label, value, true));
+            }
+
+            // Four sections (each 12 readings)
+            for (let s = 0; s < 4; s++) {
+                const section = document.createElement('div');
+                section.className = 'section';
+                const title = document.createElement('h3');
+                title.className = 'section-title';
+                title.textContent = `Section ${s + 1}`;
+                section.appendChild(title);
+
+                const grid = document.createElement('div');
+                grid.className = 'grid-12';
+                const start = 6 + s * 12;
+                for (let k = 0; k < 12; k++) {
+                    const idx = start + k; // 0-based index into arr
+                    const r = arr[idx] !== undefined ? arr[idx] : null;
+                    const label = `R${idx + 1}`;
+                    const value = formatValue(r);
+                    grid.appendChild(makeCard(label, value));
+                }
+
+                section.appendChild(grid);
+                sectionsWrap.appendChild(section);
+            }
+        }
+
+        function formatValue(v) {
+            if (v === null || v === undefined) return '—';
+            if (typeof v === 'object') {
+                // if it's an object, attempt to stringify succinctly
+                try {
+                    const s = JSON.stringify(v);
+                    // shorten if long
+                    return s.length > 36 ? s.slice(0, 34) + '…' : s;
+                } catch (e) { return String(v); }
+            }
+            return String(v);
+        }
+
+        /*********************
+         * Fetching from Firebase
+         *********************/
+        async function fetchReadings() {
+            try {
+                statusEl.textContent = 'Loading…';
+                const resp = await fetch(`${DATABASE_URL}${DATA_NODE}.json`);
+                if (!resp.ok) {
+                    throw new Error(`HTTP ${resp.status}`);
+                }
+                const data = await resp.json();
+
+                // Normalize data to array of 54 items
+                let arr = [];
+                if (Array.isArray(data)) {
+                    arr = data;
+                } else if (data && typeof data === 'object') {
+                    // if the DB node is an object with numbered keys or arbitrary keys,
+                    // collect its values. This keeps order-free; if you rely on order,
+                    // make sure DB is an array or uses keys you can sort by.
+                    arr = Object.values(data);
+                } else {
+                    arr = [];
+                }
+
+                // If there are fewer than 54 items, pad with nulls
+                while (arr.length < 54) arr.push(null);
+                if (arr.length > 54) arr = arr.slice(0, 54);
+
+                renderReadings(arr);
+                const t = new Date();
+                lastUpdateEl.textContent = `Last update: ${t.toLocaleString()}`;
+                statusEl.textContent = 'Connected';
+            } catch (err) {
+                console.error('Fetch error', err);
+                statusEl.textContent = `Error: ${err.message}`;
+            }
+        }
+
+        // Initial fetch + poll
+        fetchReadings();
+        setInterval(fetchReadings, POLL_INTERVAL);
+
+        /*********************
+         * Helpful notes displayed in console
+         *********************/
+        console.log('Dashboard ready. DATABASE_URL:', DATABASE_URL, 'DATA_NODE:', DATA_NODE);
+        console.log('If your database requires auth, you must either:');
+        console.log('  - Make the DATA_NODE readable by unauthenticated users (for demo/testing), OR');
+        console.log('  - Create a simple proxy that adds auth tokens (not included here).');
+    </script>
+</body>
+
+</html>
